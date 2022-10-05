@@ -84,14 +84,14 @@ static uint32_t next_heap_millis = 0;
 
 void setup(void) {
   Serial.begin(115200);
+  Serial.println("setup begin");
 
   wifi_connect(); 
+  delay(500);
   // homekit_storage_reset(); // to remove the previous HomeKit pairing storage when you first run this new HomeKit example
   homekit_setup();
-
   delay(500);
-  Serial.println("setup begin");
-  rf.init();
+  rf_setup();
   Serial.println("setup done");
   // sendRegister();
   // Serial.println("join command sent");
@@ -109,7 +109,7 @@ void ch_fan_active_setter(const homekit_value_t value) {
   LOG_D("Homekit sends active: %d", value.bool_value);
   
   switch (value.bool_value) {
-    case true:  transition(ActionActivate); break;
+    case true:  transition(ActionActivate);   break;
     case false: transition(ActionDeactivate); break;
   }
 }
@@ -216,6 +216,33 @@ State get_next_state(State current_state, Action action) {
     return StateIgnore;
 }
 
+void ch_fan_rotation_for_state(State state) {
+    // Change Homekit rotation speed
+    switch (state) {
+      case StateLow:
+        ch_fan_rotation_speed.value.float_value = 0.0;
+        break;
+      case StateMedium:
+      case StateTimerShort:
+        ch_fan_rotation_speed.value.float_value = 50.0;
+        break;
+      case StateHigh:
+      case StateTimerLong:
+        ch_fan_rotation_speed.value.float_value = 100.0;
+        break;
+      default:
+        break;
+    }
+    Serial.printf("Set HomeKit fan rotation speed to: %.3f \n", ch_fan_rotation_speed.value.float_value); 
+    homekit_characteristic_notify(&ch_fan_rotation_speed, ch_fan_rotation_speed.value);
+}
+
+void ch_fan_active_state(bool is_active) {
+      // Change Homekit fan active state
+    ch_fan_active.value.bool_value = is_active; 
+    homekit_characteristic_notify(&ch_fan_active, ch_fan_active.value);
+}
+
 void transition(Action action) {
     State next_state = get_next_state(current_state, action);
 
@@ -226,7 +253,8 @@ void transition(Action action) {
 
     if (next_state == StateIgnore || current_state == next_state) {
       LOG_D("Already good. Skipping transition.");
-
+      ch_fan_rotation_for_state(current_state);
+      ch_fan_active_state(current_state != StateLow);
       return;
     }
 
@@ -236,9 +264,7 @@ void transition(Action action) {
       last_speed = current_state;
     }
     
-    // Change Homekit active state
-    ch_fan_active.value.bool_value = current_state != StateLow; 
-    homekit_characteristic_notify(&ch_fan_active, ch_fan_active.value);
+    ch_fan_active_state(current_state != StateLow);
     
     // Set Homekit timer state
     ch_timer_short_on.value.bool_value = current_state == StateTimerShort;
@@ -263,24 +289,7 @@ void transition(Action action) {
         break;
     }
 
-    // Change Homekit rotation speed
-    switch (current_state) {
-      case StateLow:
-        ch_fan_rotation_speed.value.float_value = 0.0;
-        break;
-      case StateMedium:
-      case StateTimerShort:
-        ch_fan_rotation_speed.value.float_value = 50.0;
-        break;
-      case StateHigh:
-      case StateTimerLong:
-        ch_fan_rotation_speed.value.float_value = 100.0;
-        break;
-      default:
-        break;
-    }
-    Serial.printf("Set HomeKit fan rotation speed to: %.3f \n", ch_fan_rotation_speed.value.float_value); 
-    homekit_characteristic_notify(&ch_fan_rotation_speed, ch_fan_rotation_speed.value);
+    ch_fan_rotation_for_state(current_state);
     
     // Start or restart timers
     switch (action)
@@ -303,6 +312,19 @@ void homekit_setup() {
   ch_timer_long_on.setter = ch_timer_long_setter;
   
   arduino_homekit_setup(&config);
+}
+
+void rf_setup() {
+  rf.init();
+  delay(100);
+  rf.initReceive();
+  delay(100);
+  //pinMode(ITHO_IRQ_PIN, INPUT_PULLUP);
+  //attachInterrupt(ITHO_IRQ_PIN, ITHOinterrupt, CHANGE);
+  //rf.sendCommand(IthoJoin); //the ID inside ithoCC1101.cpp at this->outIthoPacket.deviceId2 is used!
+  //rf.sendCommand(IthoLeave); //the ID inside ithoCC1101.cpp at this->outIthoPacket.deviceId2 is used!
+  //delay(100);
+  rf.sendCommand(IthoLow);
 }
 
 void homekit_loop() {
