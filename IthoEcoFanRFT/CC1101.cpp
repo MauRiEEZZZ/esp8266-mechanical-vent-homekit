@@ -1,7 +1,6 @@
 /*
  * Author: Klusjesman, modified bij supersjimmie for Arduino/ESP8266
  */
-
 #include "CC1101.h"
 
 // default constructor
@@ -9,6 +8,7 @@ CC1101::CC1101()
 {
 	SPI.begin();
 #ifdef ESP8266
+#include "Arduino.h"
 	pinMode(SS, OUTPUT);
 #endif
 } //CC1101

@@ -1,8 +1,1 @@
-*.d
-*.o
-*.atsuo
-*.map
-*.eep
-*.hex
-Master/*
-wifi_info.h
+IthoEcoFanRFT/.DS_Store

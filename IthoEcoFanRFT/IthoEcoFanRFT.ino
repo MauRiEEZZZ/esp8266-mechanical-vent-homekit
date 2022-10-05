@@ -15,7 +15,6 @@
 CC11xx pins    ESP pins Arduino pins  Description
 1 - VCC        VCC      VCC           3v3
 2 - GND        GND      GND           Ground
-
 3 - MOSI       13=D7    Pin 11        Data input to CC11xx
 4 - SCK        14=D5    Pin 13        Clock pin
 5 - MISO/GDO1  12=D6    Pin 12        Data output from CC11xx / serial clock from CC11xx
@@ -24,6 +23,7 @@ CC11xx pins    ESP pins Arduino pins  Description
 8 - CSN        15=D8    Pin 10        Chip select / (SPI_SS)
 */
 
+#include "Arduino.h"
 #include <SPI.h>
 #include <arduino_homekit_server.h>
 #include <arduino-timer.h>
