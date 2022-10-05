@@ -70,11 +70,8 @@ State current_state = StateLow;
 State last_speed = StateLow;
 Timer<1, millis> timer_short;
 Timer<1, millis> timer_long;
-int timer_short_ms = 3 * 60 * 1000; // 3 min
-int timer_long_ms = 20 * 60 * 1000; // 20 min
-//int timer_short_ms = 3 * 1000; 
-//int timer_long_ms = 10 * 1000; 
-
+int timer_short_ms = 10 * 60 * 1000; // 10 min
+int timer_long_ms = 40 * 60 * 1000; // 40 min
 
 // access the HomeKit characteristics defined in fan_accessory.c
 extern "C" homekit_server_config_t config;
@@ -89,15 +86,15 @@ void setup(void) {
   Serial.begin(115200);
 
   wifi_connect(); 
-  //homekit_storage_reset(); // to remove the previous HomeKit pairing storage when you first run this new HomeKit example
+  // homekit_storage_reset(); // to remove the previous HomeKit pairing storage when you first run this new HomeKit example
   homekit_setup();
 
   delay(500);
   Serial.println("setup begin");
   rf.init();
   Serial.println("setup done");
-  sendRegister();
-  Serial.println("join command sent");
+  // sendRegister();
+  // Serial.println("join command sent");
 }
 
 void loop() {
@@ -120,20 +117,18 @@ void ch_fan_active_setter(const homekit_value_t value) {
 void ch_timer_short_setter(const homekit_value_t value) {
   LOG_D("Homekit sends short timer: %d", value.bool_value);
   
-  if (value.bool_value) {
-    transition(ActionTimerShortOn);
-  } else {
-    transition(ActionTimerShortOff);
+  switch (value.bool_value) {
+    case true: transition(ActionTimerShortOn); break;
+    case false: transition(ActionTimerShortOff); break;
   }
 }
 
 void ch_timer_long_setter(const homekit_value_t value) {
   LOG_D("Homekit sends long timer: %d", value.bool_value);
   
-  if (value.bool_value) {
-    transition(ActionTimerLongOn);
-  } else {
-    transition(ActionTimerLongOff);
+  switch (value.bool_value) {
+    case true: transition(ActionTimerLongOn); break;
+    case false: transition(ActionTimerLongOff); break;
   }
 }
 
@@ -142,16 +137,12 @@ void ch_fan_rotation_speed_setter(const homekit_value_t value) {
   LOG_D("Homekit sends rotation speed: %.6f", value.float_value); 
 
   if (compare_float(value.float_value, 0)) {
-    transition(ActionSpeedStandby); 
-  } else if (compare_float(value.float_value, 25)) {
     transition(ActionSpeedLow); 
   } else if (compare_float(value.float_value, 50)) {
     transition(ActionSpeedMedium);
-  } else if (compare_float(value.float_value, 75)) {
-    transition(ActionSpeedHigh);
   } else if (compare_float(value.float_value, 100)) {
-    transition(ActionSpeedFull);
-  } 
+    transition(ActionSpeedHigh);
+  }
 }
 
 bool time_long_expired(void *) {
@@ -172,25 +163,13 @@ bool time_short_expired(void *) {
 // Homekit often sends 'rotation speed' and 'active' at the same time.
 // The state machine avoids invalid transitions.
 State get_next_state(State current_state, Action action) {
-  switch (current_state) {
-      case StateStandby:
-        switch (action) {
-          case ActionActivate: return last_speed != StateStandby ? last_speed : StateLow;
-          case ActionSpeedLow: return StateLow; 
-          case ActionSpeedMedium: return StateMedium; 
-          case ActionSpeedHigh: return StateHigh; 
-          case ActionSpeedFull: return StateFull;
-          case ActionTimerShortOn: return StateTimerShort;
-          case ActionTimerLongOn: return StateTimerLong;
-        }
-        break;
-        
+  switch (current_state) {        
       case StateLow:
         switch (action) {
-          case ActionDeactivate: return StateStandby; 
+          case ActionActivate: return last_speed != StateLow ? last_speed : StateLow;
+          case ActionDeactivate: return StateLow; 
           case ActionSpeedMedium: return StateMedium; 
           case ActionSpeedHigh: return StateHigh; 
-          case ActionSpeedFull: return StateFull; 
           case ActionTimerShortOn: return StateTimerShort;
           case ActionTimerLongOn: return StateTimerLong;
         }
@@ -198,10 +177,9 @@ State get_next_state(State current_state, Action action) {
 
       case StateMedium:
         switch (action) {
-          case ActionDeactivate: return StateStandby; 
+          case ActionDeactivate: return StateLow; 
           case ActionSpeedLow: return StateLow; 
           case ActionSpeedHigh: return StateHigh; 
-          case ActionSpeedFull: return StateFull;
           case ActionTimerShortOn: return StateTimerShort;
           case ActionTimerLongOn: return StateTimerLong;
         }
@@ -209,30 +187,18 @@ State get_next_state(State current_state, Action action) {
         
       case StateHigh:
         switch (action) {
-          case ActionDeactivate: return StateStandby;
+          case ActionDeactivate: return StateLow; 
           case ActionSpeedLow: return StateLow; 
           case ActionSpeedMedium: return StateMedium; 
-          case ActionSpeedFull: return StateFull;
           case ActionTimerShortOn: return StateTimerShort;
           case ActionTimerLongOn: return StateTimerLong;
         }
-        break;
-
-      case StateFull:
-        switch (action) {
-          case ActionDeactivate: return StateStandby;
-          case ActionSpeedLow: return StateLow; 
-          case ActionSpeedMedium: return StateMedium; 
-          case ActionSpeedHigh: return StateHigh; 
-          case ActionTimerShortOn: return StateTimerShort;
-          case ActionTimerLongOn: return StateTimerLong;
-        }
-        break;        
+        break;      
 
       case StateTimerShort:
         switch (action) {
           case ActionTimerShortOn: return StateTimerShort; // Restart the timer if turned on again
-          case ActionTimerShortOff: timer_short.cancel(); return last_speed; // When the timer ends or is disabled, go back to the previous speed
+          case ActionTimerShortOff: timer_short.cancel(); return StateLow; // When the timer ends or is disabled, go back to the previous speed
           case ActionTimerLongOn: timer_short.cancel(); return StateTimerLong; // A short timer can be overwritten by a long timer
           // No other action can overwrite the timer
         }
@@ -241,7 +207,7 @@ State get_next_state(State current_state, Action action) {
       case StateTimerLong:
         switch (action) {
           case ActionTimerLongOn: return StateTimerLong; // Restart the timer if turned on again
-          case ActionTimerLongOff: timer_long.cancel(); return last_speed; // When the timer ends or is disabled, go back to the previous speed
+          case ActionTimerLongOff: timer_long.cancel(); return StateLow; // When the timer ends or is disabled, go back to the previous speed
           // No other action can overwrite the timer
         }
         break; 
@@ -271,7 +237,7 @@ void transition(Action action) {
     }
     
     // Change Homekit active state
-    ch_fan_active.value.bool_value = current_state != StateStandby; 
+    ch_fan_active.value.bool_value = current_state != StateLow; 
     homekit_characteristic_notify(&ch_fan_active, ch_fan_active.value);
     
     // Set Homekit timer state
@@ -280,30 +246,53 @@ void transition(Action action) {
     homekit_characteristic_notify(&ch_timer_short_on, ch_timer_short_on.value);
     homekit_characteristic_notify(&ch_timer_long_on, ch_timer_long_on.value);
     
-    // Change fan speed state and Homekit rotation speed
-    if (current_state == StateStandby) {
-      sendStandbySpeed();
-      ch_fan_rotation_speed.value.float_value = 0.0;
-    } else if (current_state == StateLow) {
-      sendLowSpeed();
-      ch_fan_rotation_speed.value.float_value = 25.0;
-    } else if (current_state == StateMedium || current_state == StateTimerShort) {
-      sendMediumSpeed();
-      ch_fan_rotation_speed.value.float_value = 50.0;
-    } else if (current_state == StateHigh || current_state == StateTimerLong) {
-      sendHighSpeed();
-      ch_fan_rotation_speed.value.float_value = 75.0;
-    } else if (current_state == StateFull) {
-      sendFullSpeed();
-      ch_fan_rotation_speed.value.float_value = 100.0;
-    }  
+    // Send the current state to IthoFan
+    switch (current_state) { 
+      case StateLow:
+        sendLowSpeed();
+        break;
+      case StateMedium:
+      case StateTimerShort:
+        sendMediumSpeed();
+        break;
+      case StateHigh:
+      case StateTimerLong:
+        sendHighSpeed();
+        break;
+      default:
+        break;
+    }
+
+    // Change Homekit rotation speed
+    switch (current_state) {
+      case StateLow:
+        ch_fan_rotation_speed.value.float_value = 0.0;
+        break;
+      case StateMedium:
+      case StateTimerShort:
+        ch_fan_rotation_speed.value.float_value = 50.0;
+        break;
+      case StateHigh:
+      case StateTimerLong:
+        ch_fan_rotation_speed.value.float_value = 100.0;
+        break;
+      default:
+        break;
+    }
+    Serial.printf("Set HomeKit fan rotation speed to: %.3f \n", ch_fan_rotation_speed.value.float_value); 
     homekit_characteristic_notify(&ch_fan_rotation_speed, ch_fan_rotation_speed.value);
     
     // Start or restart timers
-    if (action == ActionTimerShortOn) {
-      timer_short.in(timer_short_ms, time_short_expired);
-    } else if (action == ActionTimerLongOn) {
-      timer_long.in(timer_long_ms, time_long_expired);
+    switch (action)
+    {
+      case ActionTimerShortOn:
+        timer_short.in(timer_short_ms, time_short_expired);
+        break;
+      case ActionTimerLongOn:
+        timer_long.in(timer_long_ms, time_long_expired);
+        break;
+      default:
+        break;
     }
 }
 
