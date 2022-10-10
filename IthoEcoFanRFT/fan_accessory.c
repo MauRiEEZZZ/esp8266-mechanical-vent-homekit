@@ -18,7 +18,7 @@ homekit_characteristic_t ch_timer_long_on = HOMEKIT_CHARACTERISTIC_(ON, false);
 homekit_accessory_t *accessories[] = {
     HOMEKIT_ACCESSORY(.id=1, .category=homekit_accessory_category_fan, .services=(homekit_service_t*[]) {
         HOMEKIT_SERVICE(ACCESSORY_INFORMATION, .characteristics=(homekit_characteristic_t*[]) {
-            HOMEKIT_CHARACTERISTIC(NAME, "Ventilatie"),
+            HOMEKIT_CHARACTERISTIC(NAME, "RFT Ventilatie via Homekit"),
             HOMEKIT_CHARACTERISTIC(MANUFACTURER, "Itho CVE"),
             HOMEKIT_CHARACTERISTIC(SERIAL_NUMBER, "123-456-789"),
             HOMEKIT_CHARACTERISTIC(MODEL, "IthoCVE ECO RFT Ventilatie Low Medium High"),
