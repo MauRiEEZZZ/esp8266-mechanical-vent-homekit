@@ -9,6 +9,11 @@
  * Tested with Arduino IDE v1.6.5 and 1.6.9
  * For ESP8266 tested with ESP8266 core for Arduino v 2.1.0 and 2.2.0 Stable
  * (See https://github.com/esp8266/Arduino/ )
+ * 
+ * And again modified by MauRiEEZZZ:
+ * This code is compatible with the ITHO CVE that has 3 speed modes and one timer 10min
+ * Activating a speed mode using the original remote will be reflected on the homekit accessory.
+ * Also repeating the received command is enabled which will function as a repeater for better RFT reach
  */
 
 /*
@@ -32,6 +37,8 @@ CC11xx pins    ESP pins Arduino pins  Description
 #include "wifi_info.h"
 
 #define LOG_D(fmt, ...)   printf_P(PSTR(fmt "\n") , ##__VA_ARGS__);
+#define ITHO_IRQ_PIN D2
+void ICACHE_RAM_ATTR handleInterrupt();
 
 typedef enum State 
 {
@@ -66,10 +73,25 @@ char *action_to_string[] = {"none", "deactivate", "activate", "standby", "low", 
 
 IthoCC1101 rf;
 IthoPacket packet;
+volatile bool ITHOhasPacket = false;
+byte RFTcommandpos = 0;
+byte RFTRSSI[3] = {0, 0, 0};
+IthoCommand RFTcommand[3] = {IthoLow, IthoMedium, IthoHigh};
+IthoCommand RFTlastCommand = IthoLow;
+// This constant is used to filter out RFT device packets, only the packets with this ID are listened to.
+const uint8_t RFTid[] = {0x66, 0xa9, 0x6a, 0xa5, 0xa9, 0xa9, 0x9a, 0x56}; 
+bool RFTidChk[3] = {false, false, false};
+/* change the value of showEveryPacket to true if you want to see every received packet in the Serial Monitor. For instance to find the ID of your remote*/
+bool showEveryPacket = false;
+bool serialMon = true;
+bool repeater = true;
+
+
 State current_state = StateLow;
 State last_speed = StateLow;
 Timer<1, millis> timer_short;
 Timer<1, millis> timer_long;
+Timer<1, millis> ITHOCheck_execution_timer;
 int timer_short_ms = 10 * 60 * 1000; // 10 min
 int timer_long_ms = 40 * 60 * 1000; // 40 min
 
@@ -84,7 +106,7 @@ static uint32_t next_heap_millis = 0;
 
 void setup(void) {
   Serial.begin(115200);
-  Serial.println("setup begin");
+  LOG_D("setup begin");
 
   wifi_connect(); 
   delay(500);
@@ -92,15 +114,22 @@ void setup(void) {
   homekit_setup();
   delay(500);
   rf_setup();
-  Serial.println("setup done");
+  LOG_D("setup done");
   // sendRegister();
-  // Serial.println("join command sent");
+  // LOG_D("join command sent");
 }
 
 void loop() {
   homekit_loop();
   timer_short.tick();
   timer_long.tick();
+  if (ITHOhasPacket) { // ITHOhasPacket is only true if the packet was send from the RFT with corresponding RTFid
+    updateCurrentStateFromRFCommand();
+    if (serialMon) showPacket();
+    if(repeater) repeatReceivedPacketCommand();
+
+  }
+  ITHOCheck_execution_timer.tick();
   delay(10);
 }
 
@@ -233,7 +262,7 @@ void ch_fan_rotation_for_state(State state) {
       default:
         break;
     }
-    Serial.printf("Set HomeKit fan rotation speed to: %.3f \n", ch_fan_rotation_speed.value.float_value); 
+    LOG_D("Set HomeKit fan rotation speed to: %.3f \n", ch_fan_rotation_speed.value.float_value); 
     homekit_characteristic_notify(&ch_fan_rotation_speed, ch_fan_rotation_speed.value);
 }
 
@@ -319,13 +348,148 @@ void rf_setup() {
   delay(100);
   rf.initReceive();
   delay(100);
-  //pinMode(ITHO_IRQ_PIN, INPUT_PULLUP);
-  //attachInterrupt(ITHO_IRQ_PIN, ITHOinterrupt, CHANGE);
+  pinMode(ITHO_IRQ_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ITHO_IRQ_PIN), handleInterrupt, CHANGE);
   //rf.sendCommand(IthoJoin); //the ID inside ithoCC1101.cpp at this->outIthoPacket.deviceId2 is used!
   //rf.sendCommand(IthoLeave); //the ID inside ithoCC1101.cpp at this->outIthoPacket.deviceId2 is used!
-  //delay(100);
+  delay(100);
   rf.sendCommand(IthoLow);
 }
+
+void handleInterrupt() {
+  ITHOCheck_execution_timer.in(10, ITHOcheck);
+}
+
+bool ITHOcheck(void *) {
+  if (rf.checkForNewPacket()) {
+    IthoCommand cmd = rf.getLastCommand();
+    if (++RFTcommandpos > 2) RFTcommandpos = 0;  // store information in next entry of ringbuffers
+    RFTcommand[RFTcommandpos] = cmd;
+    RFTRSSI[RFTcommandpos]    = rf.ReadRSSI();
+    bool chk;
+    //if (showEveryPacket) chk = true;
+    //else chk = rf.checkID(RFTid);
+    chk = rf.checkID(RFTid);
+    RFTidChk[RFTcommandpos]   = chk;
+    if (((cmd != IthoUnknown) && chk) || showEveryPacket) {  // only act on good cmd and correct RFTid.
+      ITHOhasPacket = true;
+    }
+  }
+
+  return false; // to repeat the action - false to stop
+}
+
+uint8_t findRFTlastCommand() {
+  if (RFTcommand[RFTcommandpos] != IthoUnknown)               return RFTcommandpos;
+  if ((RFTcommandpos == 0) && (RFTcommand[2] != IthoUnknown)) return 2;
+  if ((RFTcommandpos == 0) && (RFTcommand[1] != IthoUnknown)) return 1;
+  if ((RFTcommandpos == 1) && (RFTcommand[0] != IthoUnknown)) return 0;
+  if ((RFTcommandpos == 1) && (RFTcommand[2] != IthoUnknown)) return 2;
+  if ((RFTcommandpos == 2) && (RFTcommand[1] != IthoUnknown)) return 1;
+  if ((RFTcommandpos == 2) && (RFTcommand[0] != IthoUnknown)) return 0;
+  return -1;
+}
+
+void updateCurrentStateFromRFCommand() {
+  ITHOhasPacket = false;
+  uint8_t goodpos = findRFTlastCommand();
+  if (goodpos != -1)  RFTlastCommand = RFTcommand[goodpos];
+  else                RFTlastCommand = IthoUnknown;
+  switch (RFTlastCommand) {
+    case IthoLow:
+      ch_fan_rotation_for_state(StateLow);
+      ch_fan_active_state(false);
+      break;
+    case IthoMedium:
+      ch_fan_rotation_for_state(StateMedium);
+      ch_fan_active_state(true);
+      break;
+    case IthoHigh:
+      ch_fan_rotation_for_state(StateHigh);
+      ch_fan_active_state(true);
+      break;
+  }
+}
+
+void repeatReceivedPacketCommand() {
+  ITHOhasPacket = false;
+  uint8_t goodpos = findRFTlastCommand();
+  if (goodpos != -1)  RFTlastCommand = RFTcommand[goodpos];
+  else                RFTlastCommand = IthoUnknown;
+  if (serialMon) Serial.print("Repeating command: [");
+  if (serialMon) Serial.print(RFTlastCommand);
+  rf.sendCommand(RFTlastCommand);
+  if (serialMon) Serial.println("]\n");
+}
+
+void showPacket() {
+  ITHOhasPacket = false;
+  uint8_t goodpos = findRFTlastCommand();
+  if (goodpos != -1)  RFTlastCommand = RFTcommand[goodpos];
+  else                RFTlastCommand = IthoUnknown;
+  //show data
+  Serial.print(F("RFT Current Pos: "));
+  Serial.print(RFTcommandpos);
+  Serial.print(F(", Good Pos: "));
+  Serial.println(goodpos);
+  Serial.print(F("Stored 3 commands: "));
+  Serial.print(RFTcommand[0]);
+  Serial.print(F(" "));
+  Serial.print(RFTcommand[1]);
+  Serial.print(F(" "));
+  Serial.print(RFTcommand[2]);
+  Serial.print(F(" / Stored 3 RSSI's:     "));
+  Serial.print(RFTRSSI[0]);
+  Serial.print(F(" "));
+  Serial.print(RFTRSSI[1]);
+  Serial.print(F(" "));
+  Serial.print(RFTRSSI[2]);
+  Serial.print(F(" / Stored 3 ID checks: "));
+  Serial.print(RFTidChk[0]);
+  Serial.print(F(" "));
+  Serial.print(RFTidChk[1]);
+  Serial.print(F(" "));
+  Serial.print(RFTidChk[2]);
+  Serial.print(F(" / Last ID: "));
+  Serial.print(rf.getLastIDstr());
+
+  Serial.print(F(" / Command = "));
+  //show command
+  switch (RFTlastCommand) {
+    case IthoUnknown:
+      Serial.print("unknown\n");
+      break;
+    case IthoLow:
+      Serial.print("low\n");
+      break;
+    case IthoMedium:
+      Serial.print("medium\n");
+      break;
+    case IthoHigh:
+      Serial.print("high\n");
+      break;
+    case IthoFull:
+      Serial.print("full\n");
+      break;
+    case IthoTimer1:
+      Serial.print("timer1\n");
+      break;
+    case IthoTimer2:
+      Serial.print("timer2\n");
+      break;
+    case IthoTimer3:
+      Serial.print("timer3\n");
+      break;
+    case IthoJoin:
+      Serial.print("join\n");
+      break;
+    case IthoLeave:
+      Serial.print("leave\n");
+      break;
+  }
+  Serial.print("##### End of packet #####\n");
+}
+
 
 void homekit_loop() {
   arduino_homekit_loop();
